@@ -569,10 +569,11 @@ class YoutubeMusicTUI:
         self.stdscr.erase()
         h, w = self.stdscr.getmaxyx()
 
-        if h < 18 or w < 64:
-            msg = "Terminal terlalu kecil! Harap perbesar ukuran jendela terminal."
+        # Batas minimum resolusi terminal yang sangat fleksibel (mendukung HP kecil)
+        if h < 8 or w < 20:
+            msg = f"Terminal terlalu kecil ({w}x{h})! Min: 20x8"
             try:
-                self.stdscr.addstr(h // 2, max(0, (w - len(msg)) // 2), msg, curses.color_pair(5) | curses.A_BOLD)
+                self.stdscr.addstr(max(0, h // 2), max(0, (w - len(msg)) // 2), msg[:max(1, w - 1)], curses.color_pair(5) | curses.A_BOLD)
             except curses.error:
                 pass
             self.stdscr.refresh()
@@ -584,21 +585,32 @@ class YoutubeMusicTUI:
             self.stdscr.refresh()
             return
 
-        # 1. Header Bar dengan branding "by ArioDev7"
+        # Pilih layout: Wide (Desktop/Tablet) vs Compact (Smartphone/Portrait)
+        if w >= 64 and h >= 16:
+            self._draw_desktop(h, w)
+        else:
+            self._draw_mobile(h, w)
+
+        self.stdscr.refresh()
+
+    def _draw_desktop(self, h: int, w: int):
+        """Tata letak 2 kolom berdampingan untuk Desktop / Layar Lebar."""
+        # 1. Header Bar
         header_title = " 󰎆  YOUTUBE MUSIC TUI  •  by ArioDev7  •  CATPPUCCIN MOCHA "
         self._draw_box(0, 0, 3, w, "", 6)
         try:
-            self.stdscr.addstr(1, 2, header_title, curses.color_pair(1) | curses.A_BOLD)
+            self.stdscr.addstr(1, 2, header_title[:w - 4], curses.color_pair(1) | curses.A_BOLD)
             active_info = f"[Tab] TAB: {self.active_tab} ({len(self._get_active_list())} lagu)  •  [?] BANTUAN "
-            self.stdscr.addstr(1, max(2, w - len(active_info) - 2), active_info, curses.color_pair(2) | curses.A_BOLD)
+            if w > len(header_title) + len(active_info) + 6:
+                self.stdscr.addstr(1, w - len(active_info) - 2, active_info, curses.color_pair(2) | curses.A_BOLD)
         except curses.error:
             pass
 
-        # Tata letak split panel
+        # Split panel
         main_top = 3
         bottom_h = 3
         main_h = h - main_top - bottom_h
-        
+
         split_x = int(w * 0.58)
         left_w = split_x
         right_w = w - split_x
@@ -606,36 +618,170 @@ class YoutubeMusicTUI:
         # 2. Panel Kiri: Hasil Pencarian / Antrean
         list_title = f"󰠃 Hasil: '{self.query[:16]}' [ / Cari ]" if self.active_tab == "SEARCH" else "󰒮 Antrean Lagu (Queue)"
         self._draw_box(main_top, 0, main_h, left_w, list_title, 6)
-        self._draw_track_list(main_top + 1, 1, main_h - 2, left_w - 2)
+        self._draw_track_list(main_top + 1, 1, max(1, main_h - 2), max(1, left_w - 2))
 
         # 3. Panel Kanan: Player Card & Animated Equalizer
         self._draw_box(main_top, split_x, main_h, right_w, "󰋋 Sedang Diputar", 6)
-        self._draw_player_card(main_top + 1, split_x + 1, main_h - 2, right_w - 2)
+        self._draw_player_card(main_top + 1, split_x + 1, max(1, main_h - 2), max(1, right_w - 2))
 
-        # 4. Footer Bar: Status / Baris Input Pencarian
+        # 4. Footer Bar
         foot_y = h - bottom_h
         self._draw_box(foot_y, 0, bottom_h, w, "", 6)
+        self._draw_footer_content(foot_y + 1, 2, w - 4)
 
+    def _draw_mobile(self, h: int, w: int):
+        """Tata letak responsif bertingkat khusus smartphone layar sempit/potret."""
+        cur_y = 0
+
+        # 1. Header (Compact)
+        items = self._get_active_list()
+        if h >= 22:
+            self._draw_box(0, 0, 3, w, "", 6)
+            try:
+                hdr = " 󰎆 YT MUSIC • ArioDev7"[:w - 4]
+                self.stdscr.addstr(1, 2, hdr, curses.color_pair(1) | curses.A_BOLD)
+                tab_tag = f"[{self.active_tab}:{len(items)}]"
+                if w > len(hdr) + len(tab_tag) + 6:
+                    self.stdscr.addstr(1, w - len(tab_tag) - 2, tab_tag, curses.color_pair(2) | curses.A_BOLD)
+            except curses.error:
+                pass
+            cur_y = 3
+        else:
+            hdr = f" 󰎆 YT MUSIC • [{self.active_tab}:{len(items)}]"[:w - 1]
+            try:
+                self.stdscr.addstr(0, 0, hdr, curses.color_pair(1) | curses.A_BOLD)
+            except curses.error:
+                pass
+            cur_y = 1
+
+        # 2. Player Section (Atas)
+        footer_h = 2 if (h >= 14 or self.search_active) else 1
+        rem_h = h - cur_y - footer_h
+
+        if rem_h >= 14:
+            player_h = 5
+            self._draw_box(cur_y, 0, player_h, w, "󰋋 Pemutar", 6)
+            self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2, show_details=True)
+            cur_y += player_h
+        elif rem_h >= 9:
+            player_h = 4
+            self._draw_box(cur_y, 0, player_h, w, "󰋋 Pemutar", 6)
+            self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2, show_details=False)
+            cur_y += player_h
+        else:
+            # Mode sangat sempit: Player bar 1-2 baris tanpa box
+            player_h = 2 if rem_h >= 6 else 1
+            self._draw_player_minimal(cur_y, 0, player_h, w)
+            cur_y += player_h
+
+        # 3. Track List Section (Tengah)
+        list_h = h - cur_y - footer_h
+        if list_h >= 4:
+            list_title = f"󰠃 {self.query[:12]}" if self.active_tab == "SEARCH" else "󰒮 Antrean"
+            self._draw_box(cur_y, 0, list_h, w, list_title, 6)
+            self._draw_track_list(cur_y + 1, 1, list_h - 2, w - 2)
+        elif list_h > 0:
+            self._draw_track_list(cur_y, 0, list_h, w)
+
+        # 4. Footer Section (Bawah)
+        foot_y = h - footer_h
+        self._draw_footer_content(foot_y, 1, w - 2, is_mobile=True)
+
+    def _draw_player_compact(self, y: int, x: int, h: int, w: int, show_details: bool = True):
+        """Player card ringkas untuk layar HP di dalam box."""
+        track = self.mpv.current_track
         try:
-            if self.search_active:
-                # Baris input pencarian langsung di footer
-                typed = "".join(self.search_input)
-                prompt_text = f" 󰠃 CARI YOUTUBE: > {typed}█"
-                hint_text = "[Enter] Cari  •  [Esc] Batal "
-                self.stdscr.addstr(foot_y + 1, 2, prompt_text[:w - len(hint_text) - 4], curses.color_pair(3) | curses.A_BOLD)
-                if w > len(hint_text) + 20:
-                    self.stdscr.addstr(foot_y + 1, w - len(hint_text) - 2, hint_text, curses.color_pair(4) | curses.A_BOLD)
+            # Baris 1: Status Icon + Judul - Artis
+            if self.mpv.is_playing:
+                icon = "󰏤" if self.mpv.is_paused else "󰐊"
+                col = curses.color_pair(4) if self.mpv.is_paused else curses.color_pair(3)
             else:
-                # Baris status biasa & tombol bantuan
-                status_text = f" {self.status_message}"[:w - 40]
-                shortcuts = "[?] Bantuan  [/] Cari  [Spasi] Jeda  [Enter] Putar  [a] Antre  [q] Keluar"
-                self.stdscr.addstr(foot_y + 1, 2, status_text, curses.color_pair(4) | curses.A_BOLD)
-                if w > len(shortcuts) + len(status_text) + 4:
-                    self.stdscr.addstr(foot_y + 1, w - len(shortcuts) - 2, shortcuts, curses.color_pair(7))
+                icon = "󰓛"
+                col = curses.color_pair(7)
+
+            if track:
+                song_text = f"{icon} {track.title} - {track.artist}"[:w - 2]
+            else:
+                song_text = f"{icon} Belum ada lagu. Cari dgn [/]"[:w - 2]
+            self.stdscr.addstr(y, x + 1, song_text, col | curses.A_BOLD)
+
+            # Baris 2: Progress bar + Waktu
+            if h >= 2:
+                cur_sec = self.mpv.time_pos
+                tot_sec = self.mpv.duration or (track.duration if track else 0) or 1.0
+                fraction = max(0.0, min(1.0, cur_sec / tot_sec))
+                cur_s = self._format_time(cur_sec)
+                tot_s = self._format_time(tot_sec)
+
+                bar_w = max(4, w - len(cur_s) - len(tot_s) - 6)
+                filled = int(bar_w * fraction)
+                bar = "━" * filled + "╸" + "━" * max(0, bar_w - filled) if filled < bar_w else "━" * bar_w
+                prog_str = f"{cur_s} {bar} {tot_s}"[:w - 2]
+                self.stdscr.addstr(y + 1, x + 1, prog_str, curses.color_pair(1))
+
+            # Baris 3: Detail Volume, Loop & Visualizer (jika cukup ruang)
+            if h >= 3 and show_details:
+                vol_str = f"󰕾 {self.mpv.volume}%"
+                loop_str = f"󰑖 {self.mpv.loop_mode.upper()}"
+                eq_str = ""
+                if self.mpv.is_playing and not self.mpv.is_paused:
+                    avail_eq = max(0, (w - len(vol_str) - len(loop_str) - 8) // 2)
+                    for val in self.eq_heights[:avail_eq]:
+                        eq_str += self.eq_chars[val] + " "
+                line_str = f"{vol_str}  {loop_str}  {eq_str}"[:w - 2]
+                self.stdscr.addstr(y + 2, x + 1, line_str, curses.color_pair(2))
         except curses.error:
             pass
 
-        self.stdscr.refresh()
+    def _draw_player_minimal(self, y: int, x: int, h: int, w: int):
+        """Player bar 1-2 baris tanpa box untuk ruang sangat terbatas."""
+        track = self.mpv.current_track
+        try:
+            icon = "󰐊" if (self.mpv.is_playing and not self.mpv.is_paused) else ("󰏤" if self.mpv.is_playing else "󰓛")
+            col = curses.color_pair(3) if (self.mpv.is_playing and not self.mpv.is_paused) else curses.color_pair(7)
+
+            if track:
+                cur_s = self._format_time(self.mpv.time_pos)
+                tot_s = self._format_time(self.mpv.duration or track.duration or 0)
+                time_tag = f"[{cur_s}/{tot_s}]"
+                title_w = max(5, w - len(time_tag) - 5)
+                self.stdscr.addstr(y, x + 1, f"{icon} {track.title[:title_w]} {time_tag}"[:w - 1], col | curses.A_BOLD)
+            else:
+                self.stdscr.addstr(y, x + 1, f"{icon} YouTube Music TUI"[:w - 1], col | curses.A_BOLD)
+
+            if h >= 2:
+                sep = "─" * (w - 2)
+                self.stdscr.addstr(y + 1, x + 1, sep[:w - 2], curses.color_pair(6))
+        except curses.error:
+            pass
+
+    def _draw_footer_content(self, y: int, x: int, max_w: int, is_mobile: bool = False):
+        """Menggambar footer: input bar pencarian atau status + shortcut."""
+        try:
+            if self.search_active:
+                typed = "".join(self.search_input)
+                prompt_text = f" 󰠃 CARI: > {typed}█"
+                hint_text = "[Enter] Cari [Esc] Batal"
+                if max_w > len(hint_text) + 15:
+                    self.stdscr.addstr(y, x, prompt_text[:max_w - len(hint_text) - 2], curses.color_pair(3) | curses.A_BOLD)
+                    self.stdscr.addstr(y, x + max_w - len(hint_text), hint_text, curses.color_pair(4) | curses.A_BOLD)
+                else:
+                    self.stdscr.addstr(y, x, prompt_text[:max_w], curses.color_pair(3) | curses.A_BOLD)
+            else:
+                if is_mobile:
+                    shortcuts = "[/]Cari [Spasi]Jeda [Enter]Putar [Tab]Antre"
+                    if self.status_message and "Ditemukan" in self.status_message:
+                        self.stdscr.addstr(y, x, f" {self.status_message}"[:max_w], curses.color_pair(4) | curses.A_BOLD)
+                    else:
+                        self.stdscr.addstr(y, x, shortcuts[:max_w], curses.color_pair(7))
+                else:
+                    status_text = f" {self.status_message}"[:max_w - 40]
+                    shortcuts = "[?] Bantuan  [/] Cari  [Spasi] Jeda  [Enter] Putar  [a] Antre  [q] Keluar"
+                    self.stdscr.addstr(y, x, status_text, curses.color_pair(4) | curses.A_BOLD)
+                    if max_w > len(shortcuts) + len(status_text) + 4:
+                        self.stdscr.addstr(y, x + max_w - len(shortcuts), shortcuts, curses.color_pair(7))
+        except curses.error:
+            pass
 
     def _draw_track_list(self, y: int, x: int, h: int, w: int):
         items = self._get_active_list()
@@ -702,68 +848,76 @@ class YoutubeMusicTUI:
             state_color = curses.color_pair(7)
 
         try:
+            cur_line = y + 1
             # 1. Status badge
-            self.stdscr.addstr(y + 1, x + 2, state_str, state_color | curses.A_BOLD)
+            if cur_line < y + h:
+                self.stdscr.addstr(cur_line, x + 2, state_str[:w - 4], state_color | curses.A_BOLD)
+                cur_line += 2
 
             # 2. Judul & Artis
             if track:
-                title = track.title[:w - 4]
-                artist = f"󰠃 {track.artist}"[:w - 4]
-                self.stdscr.addstr(y + 3, x + 2, title, curses.color_pair(1) | curses.A_BOLD)
-                self.stdscr.addstr(y + 4, x + 2, artist, curses.color_pair(2))
+                if cur_line < y + h:
+                    self.stdscr.addstr(cur_line, x + 2, track.title[:w - 4], curses.color_pair(1) | curses.A_BOLD)
+                    cur_line += 1
+                if cur_line < y + h:
+                    self.stdscr.addstr(cur_line, x + 2, f"󰠃 {track.artist}"[:w - 4], curses.color_pair(2))
+                    cur_line += 2
             else:
-                self.stdscr.addstr(y + 3, x + 2, "Pilih lagu dan tekan [Enter]", curses.color_pair(7))
-                self.stdscr.addstr(y + 4, x + 2, "untuk mulai streaming audio.", curses.color_pair(7))
+                if cur_line < y + h:
+                    self.stdscr.addstr(cur_line, x + 2, "Pilih lagu dan tekan [Enter]"[:w - 4], curses.color_pair(7))
+                    cur_line += 1
+                if cur_line < y + h:
+                    self.stdscr.addstr(cur_line, x + 2, "untuk mulai streaming audio."[:w - 4], curses.color_pair(7))
+                    cur_line += 2
 
-            # 3. Waveform Equalizer
-            eq_y = y + 7
-            if eq_y + 2 < y + h:
+            # 3. Waveform Equalizer (jika tinggi layar mencukupi)
+            if cur_line + 4 < y + h:
                 eq_line = ""
-                for val in self.eq_heights[:(w - 6) // 2]:
+                for val in self.eq_heights[:max(1, (w - 6) // 2)]:
                     eq_line += self.eq_chars[val] + " "
-                self.stdscr.addstr(eq_y, x + 2, eq_line[:w - 4], curses.color_pair(2) | curses.A_BOLD)
+                self.stdscr.addstr(cur_line, x + 2, eq_line[:w - 4], curses.color_pair(2) | curses.A_BOLD)
+                cur_line += 2
 
             # 4. Progress Bar
-            cur_sec = self.mpv.time_pos
-            tot_sec = self.mpv.duration or (track.duration if track else 0) or 1.0
-            fraction = max(0.0, min(1.0, cur_sec / tot_sec))
-            
-            cur_time_str = self._format_time(cur_sec)
-            tot_time_str = self._format_time(tot_sec)
-            
-            bar_w = max(10, w - len(cur_time_str) - len(tot_time_str) - 8)
-            filled_len = int(bar_w * fraction)
-            bar = "━" * filled_len + "╸" + "━" * max(0, bar_w - filled_len) if filled_len < bar_w else "━" * bar_w
-            
-            progress_y = y + 10
-            if progress_y < y + h:
+            if cur_line < y + h:
+                cur_sec = self.mpv.time_pos
+                tot_sec = self.mpv.duration or (track.duration if track else 0) or 1.0
+                fraction = max(0.0, min(1.0, cur_sec / tot_sec))
+                cur_time_str = self._format_time(cur_sec)
+                tot_time_str = self._format_time(tot_sec)
+                
+                bar_w = max(5, w - len(cur_time_str) - len(tot_time_str) - 8)
+                filled_len = int(bar_w * fraction)
+                bar = "━" * filled_len + "╸" + "━" * max(0, bar_w - filled_len) if filled_len < bar_w else "━" * bar_w
                 prog_str = f"{cur_time_str} {bar} {tot_time_str}"[:w - 4]
-                self.stdscr.addstr(progress_y, x + 2, prog_str, curses.color_pair(1))
+                self.stdscr.addstr(cur_line, x + 2, prog_str, curses.color_pair(1))
+                cur_line += 2
 
             # 5. Volume & Mode Info
-            info_y = y + 12
-            if info_y < y + h:
-                vol_bar_w = 10
+            if cur_line < y + h:
+                vol_bar_w = max(4, min(10, w - 24))
                 vol_filled = int(vol_bar_w * (self.mpv.volume / 100.0))
                 vol_bar = "█" * min(vol_bar_w, vol_filled) + "░" * max(0, vol_bar_w - vol_filled)
                 mute_tag = " [MUTED]" if self.mpv.is_muted else ""
                 vol_str = f"󰕾 Vol: {self.mpv.volume:3d}% [{vol_bar}]{mute_tag}"
-                loop_str = f"󰑖 Ulang: {self.mpv.loop_mode.upper()}  •  by ArioDev7"
-                self.stdscr.addstr(info_y, x + 2, vol_str[:w - 4], curses.color_pair(3))
-                if info_y + 1 < y + h:
-                    self.stdscr.addstr(info_y + 1, x + 2, loop_str[:w - 4], curses.color_pair(4))
+                self.stdscr.addstr(cur_line, x + 2, vol_str[:w - 4], curses.color_pair(3))
+                cur_line += 1
+                if cur_line < y + h:
+                    loop_str = f"󰑖 Ulang: {self.mpv.loop_mode.upper()}  •  by ArioDev7"
+                    self.stdscr.addstr(cur_line, x + 2, loop_str[:w - 4], curses.color_pair(4))
 
         except curses.error:
             pass
 
     def _draw_help_screen(self, h: int, w: int):
-        """Menggambar layar penuh panduan keybindings yang bersih dan terstruktur."""
-        box_w = min(74, w - 2)
-        box_h = min(24, h - 2)
-        start_y = max(1, (h - box_h) // 2)
-        start_x = max(1, (w - box_w) // 2)
+        """Menggambar layar penuh panduan keybindings yang responsif untuk HP & Desktop."""
+        box_w = max(18, min(74, w - 2))
+        box_h = max(8, min(24, h - 2))
+        start_y = max(0, (h - box_h) // 2)
+        start_x = max(0, (w - box_w) // 2)
 
-        self._draw_box(start_y, start_x, box_h, box_w, "󰋖 PANDUAN KEYBINDINGS • by ArioDev7", 6)
+        title = "󰋖 KEYBINDINGS" if box_w < 40 else "󰋖 PANDUAN KEYBINDINGS • ArioDev7"
+        self._draw_box(start_y, start_x, box_h, box_w, title, 6)
 
         categories = [
             ("󰎆 NAVIGASI & PEMUTARAN", [
@@ -791,23 +945,28 @@ class YoutubeMusicTUI:
         ]
 
         try:
-            cur_y = start_y + 2
+            cur_y = start_y + 1
             for cat_title, items in categories:
-                if cur_y >= start_y + box_h - 4:
+                if cur_y >= start_y + box_h - 2:
                     break
-                self.stdscr.addstr(cur_y, start_x + 3, cat_title, curses.color_pair(2) | curses.A_BOLD)
+                self.stdscr.addstr(cur_y, start_x + 2, cat_title[:box_w - 4], curses.color_pair(2) | curses.A_BOLD)
                 cur_y += 1
                 for key_lbl, desc in items:
-                    if cur_y >= start_y + box_h - 3:
+                    if cur_y >= start_y + box_h - 2:
                         break
-                    self.stdscr.addstr(cur_y, start_x + 5, f"{key_lbl:<14}", curses.color_pair(3) | curses.A_BOLD)
-                    self.stdscr.addstr(cur_y, start_x + 20, f": {desc}"[:box_w - 22], curses.color_pair(7))
+                    if box_w < 48:
+                        line = f"{key_lbl}: {desc}"[:box_w - 4]
+                        self.stdscr.addstr(cur_y, start_x + 2, line, curses.color_pair(7))
+                    else:
+                        self.stdscr.addstr(cur_y, start_x + 3, f"{key_lbl:<12}", curses.color_pair(3) | curses.A_BOLD)
+                        self.stdscr.addstr(cur_y, start_x + 16, f": {desc}"[:box_w - 18], curses.color_pair(7))
                     cur_y += 1
                 cur_y += 1
 
-            bottom_hint = "[ Tekan sembarang tombol / Esc untuk kembali ke Pemutar ]"
-            self.stdscr.addstr(start_y + box_h - 2, max(start_x + 2, start_x + (box_w - len(bottom_hint)) // 2),
-                               bottom_hint, curses.color_pair(4) | curses.A_BOLD)
+            bottom_hint = "[ Esc / q: Tutup ]" if box_w < 40 else "[ Tekan Esc / q untuk kembali ]"
+            if start_y + box_h - 1 < h:
+                self.stdscr.addstr(start_y + box_h - 1, max(start_x + 2, start_x + (box_w - len(bottom_hint)) // 2),
+                                   bottom_hint[:box_w - 4], curses.color_pair(4) | curses.A_BOLD)
         except curses.error:
             pass
 
@@ -817,19 +976,19 @@ class YoutubeMusicTUI:
         while True:
             self.stdscr.erase()
             h, w = self.stdscr.getmaxyx()
-            box_w = min(68, w - 4)
-            box_h = 11
-            y = max(1, (h - box_h) // 2)
-            x = max(1, (w - box_w) // 2)
+            box_w = max(20, min(68, w - 4))
+            box_h = max(8, min(11, h - 2))
+            y = max(0, (h - box_h) // 2)
+            x = max(0, (w - box_w) // 2)
 
             self._draw_box(y, x, box_h, box_w, "󰅚 Dependensi Diperlukan", 5)
             try:
-                self.stdscr.addstr(y + 2, x + 3, "Aplikasi ini membutuhkan 'mpv' untuk streaming audio YouTube.", curses.color_pair(7) | curses.A_BOLD)
-                self.stdscr.addstr(y + 4, x + 3, "Buka terminal Anda dan jalankan perintah berikut:", curses.color_pair(7))
-                cmd_hint = "sudo apt install -y mpv mpv-mpris"
-                self.stdscr.addstr(y + 5, x + 5, f"> {cmd_hint}", curses.color_pair(3) | curses.A_BOLD)
-                self.stdscr.addstr(y + 7, x + 3, "Paket 'mpv-mpris' juga otomatis menghubungkannya ke Polybar / playerctl!", curses.color_pair(2))
-                self.stdscr.addstr(y + 9, x + 3, "Tekan [q] untuk keluar.", curses.color_pair(4) | curses.A_BOLD)
+                if box_h >= 6:
+                    self.stdscr.addstr(y + 1, x + 2, "Aplikasi ini butuh 'mpv'."[:box_w - 4], curses.color_pair(7) | curses.A_BOLD)
+                    self.stdscr.addstr(y + 2, x + 2, "Jalankan perintah ini:"[:box_w - 4], curses.color_pair(7))
+                    self.stdscr.addstr(y + 3, x + 2, "> pacman -S mpv yt-dlp"[:box_w - 4], curses.color_pair(3) | curses.A_BOLD)
+                if box_h >= 8:
+                    self.stdscr.addstr(y + 5, x + 2, "Tekan [q] untuk keluar."[:box_w - 4], curses.color_pair(4) | curses.A_BOLD)
             except curses.error:
                 pass
             self.stdscr.refresh()
