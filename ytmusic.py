@@ -41,6 +41,7 @@ class MpvController:
         
         self.current_track: Optional[Track] = None
         self.is_playing = False
+        self.is_loading = False
         self.is_paused = False
         self.is_muted = False
         self.volume = 80
@@ -62,20 +63,32 @@ class MpvController:
         # Bersihkan instans MPV dan socket lama
         self._cleanup_old_instances()
 
+        # Konfigurasi environment audio PulseAudio untuk proot / omalauncher
+        env = os.environ.copy()
+        pulse_sock = f"/run/user/{os.getuid()}/pulse/native"
+        if os.path.exists(pulse_sock):
+            env["PULSE_SERVER"] = f"unix:{pulse_sock}"
+
         cmd = [
             "mpv",
             "--no-video",
             "--idle=yes",
             f"--input-ipc-server={IPC_SOCKET}",
+            "--ao=pulse,alsa",
+            "--pulse-buffer=250",
+            "--audio-samplerate=48000",
             f"--volume={self.volume}",
+            "--mute=no",
             "--demuxer-max-bytes=10M",
             "--demuxer-readahead-secs=15",
-            "--ytdl-format=bestaudio/best",
+            "--ytdl-format=251/140/bestaudio/best",
+            "--audio-client-name=ytmusic",
         ]
 
         try:
             self.process = subprocess.Popen(
                 cmd,
+                env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL
@@ -83,8 +96,8 @@ class MpvController:
         except Exception:
             return False
 
-        # Tunggu socket siap (maks 3 detik)
-        for _ in range(30):
+        # Tunggu socket siap (maks 5 detik)
+        for _ in range(50):
             if os.path.exists(IPC_SOCKET):
                 break
             time.sleep(0.1)
@@ -132,7 +145,8 @@ class MpvController:
         self.current_track = track
         self.duration = float(track.duration or 0)
         self.time_pos = 0.0
-        self.is_playing = True
+        self.is_loading = True
+        self.is_playing = False
         self.is_paused = False
 
         url = f"https://www.youtube.com/watch?v={track.video_id}"
@@ -140,7 +154,7 @@ class MpvController:
         self.send_command(["set_property", "pause", False])
 
     def toggle_pause(self):
-        if not self.is_playing:
+        if not self.is_playing and not self.is_loading:
             return
         self.send_command(["cycle", "pause"])
 
@@ -157,6 +171,7 @@ class MpvController:
 
     def stop(self):
         self._running = False
+        self.is_loading = False
         self.is_playing = False
         try:
             if self.sock:
@@ -200,6 +215,9 @@ class MpvController:
                     val = data.get("data")
                     if name == "time-pos" and isinstance(val, (int, float)):
                         self.time_pos = float(val)
+                        if val > 0:
+                            self.is_loading = False
+                            self.is_playing = True
                     elif name == "duration" and isinstance(val, (int, float)):
                         self.duration = float(val)
                     elif name == "pause" and isinstance(val, bool):
@@ -208,15 +226,16 @@ class MpvController:
                         self.is_muted = val
 
                 elif evt == "playback-restart":
+                    self.is_loading = False
                     self.is_playing = True
 
                 elif evt == "end-file":
-                    reason = data.get("reason")
-                    if reason in ["eof", "stop"]:
-                        self.is_playing = False
-                        self.time_pos = 0.0
-                        if self.on_track_end:
-                            self.on_track_end(reason)
+                    reason = data.get("reason", "unknown")
+                    self.is_loading = False
+                    self.is_playing = False
+                    self.time_pos = 0.0
+                    if self.on_track_end:
+                        self.on_track_end(reason)
             except Exception:
                 pass
 
@@ -353,6 +372,13 @@ class YoutubeMusicTUI:
 
     def _handle_track_finished(self, reason: str):
         """Callback saat lagu selesai diputar oleh MPV."""
+        if reason == "error":
+            self.set_status("󰅚 Gagal memuat audio YouTube. Melewati lagu...")
+            if self.queue:
+                next_song = self.queue.pop(0)
+                self.play_track(next_song)
+            return
+
         if self.mpv.loop_mode == "single" and self.mpv.current_track:
             self.play_track(self.mpv.current_track)
         elif self.queue:
@@ -692,7 +718,10 @@ class YoutubeMusicTUI:
         track = self.mpv.current_track
         try:
             # Baris 1: Status Icon + Judul - Artis
-            if self.mpv.is_playing:
+            if self.mpv.is_loading:
+                icon = "󰑮"
+                col = curses.color_pair(2)
+            elif self.mpv.is_playing:
                 icon = "󰏤" if self.mpv.is_paused else "󰐊"
                 col = curses.color_pair(4) if self.mpv.is_paused else curses.color_pair(3)
             else:
@@ -737,8 +766,12 @@ class YoutubeMusicTUI:
         """Player bar 1-2 baris tanpa box untuk ruang sangat terbatas."""
         track = self.mpv.current_track
         try:
-            icon = "󰐊" if (self.mpv.is_playing and not self.mpv.is_paused) else ("󰏤" if self.mpv.is_playing else "󰓛")
-            col = curses.color_pair(3) if (self.mpv.is_playing and not self.mpv.is_paused) else curses.color_pair(7)
+            if self.mpv.is_loading:
+                icon = "󰑮"
+                col = curses.color_pair(2)
+            else:
+                icon = "󰐊" if (self.mpv.is_playing and not self.mpv.is_paused) else ("󰏤" if self.mpv.is_playing else "󰓛")
+                col = curses.color_pair(3) if (self.mpv.is_playing and not self.mpv.is_paused) else curses.color_pair(7)
 
             if track:
                 cur_s = self._format_time(self.mpv.time_pos)
@@ -840,7 +873,10 @@ class YoutubeMusicTUI:
     def _draw_player_card(self, y: int, x: int, h: int, w: int):
         track = self.mpv.current_track
         
-        if self.mpv.is_playing:
+        if self.mpv.is_loading:
+            state_str = "󰑮 MEMUAT AUDIO..."
+            state_color = curses.color_pair(2)
+        elif self.mpv.is_playing:
             state_str = "󰏤 DIJEDA" if self.mpv.is_paused else "󰐊 SEDANG MEMUTAR"
             state_color = curses.color_pair(4) if self.mpv.is_paused else curses.color_pair(3)
         else:
