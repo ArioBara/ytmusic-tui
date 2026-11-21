@@ -34,10 +34,11 @@ class Track:
 
 class MpvController:
     """Mengelola proses pemutar MPV melalui IPC Unix Socket JSON-RPC secara asinkron."""
-    def __init__(self, on_track_end_callback=None):
+    def __init__(self, on_track_end_callback=None, on_playback_start_callback=None):
         self.process: Optional[subprocess.Popen] = None
         self.sock: Optional[socket.socket] = None
         self.on_track_end = on_track_end_callback
+        self.on_playback_start = on_playback_start_callback
         
         self.current_track: Optional[Track] = None
         self.is_playing = False
@@ -81,7 +82,8 @@ class MpvController:
             "--mute=no",
             "--demuxer-max-bytes=10M",
             "--demuxer-readahead-secs=15",
-            "--ytdl-format=251/140/bestaudio/best",
+            "--ytdl-format=bestaudio/best[height<=480]/best",
+            "--ytdl-raw-options=js-runtimes=node:node,no-warnings=",
             "--audio-client-name=ytmusic",
         ]
 
@@ -142,11 +144,14 @@ class MpvController:
                 pass
 
     def play(self, track: Track):
+        if self.current_track and self.current_track.video_id == track.video_id and (self.is_playing or self.is_loading):
+            return
+
         self.current_track = track
         self.duration = float(track.duration or 0)
         self.time_pos = 0.0
         self.is_loading = True
-        self.is_playing = False
+        self.is_playing = True
         self.is_paused = False
 
         url = f"https://www.youtube.com/watch?v={track.video_id}"
@@ -154,7 +159,7 @@ class MpvController:
         self.send_command(["set_property", "pause", False])
 
     def toggle_pause(self):
-        if not self.is_playing and not self.is_loading:
+        if not self.is_playing or self.is_loading:
             return
         self.send_command(["cycle", "pause"])
 
@@ -215,9 +220,11 @@ class MpvController:
                     val = data.get("data")
                     if name == "time-pos" and isinstance(val, (int, float)):
                         self.time_pos = float(val)
-                        if val > 0:
+                        if self.is_loading and val > 0:
                             self.is_loading = False
                             self.is_playing = True
+                            if self.on_playback_start:
+                                self.on_playback_start()
                     elif name == "duration" and isinstance(val, (int, float)):
                         self.duration = float(val)
                     elif name == "pause" and isinstance(val, bool):
@@ -242,7 +249,10 @@ class MpvController:
 class YoutubeMusicTUI:
     def __init__(self, stdscr):
         self.stdscr = stdscr
-        self.mpv = MpvController(on_track_end_callback=self._handle_track_finished)
+        self.mpv = MpvController(
+            on_track_end_callback=self._handle_track_finished,
+            on_playback_start_callback=self._handle_playback_started
+        )
         
         # State Data
         self.search_results: List[Track] = []
@@ -370,6 +380,11 @@ class YoutubeMusicTUI:
         self.set_status(f"󰐊 Memuat audio: {track.title[:32]}...")
         self.mpv.play(track)
 
+    def _handle_playback_started(self):
+        """Callback saat audio mulai benar-benar mengalir (pos > 0)."""
+        if self.mpv.current_track:
+            self.set_status(f"󰐊 Sedang memutar: {self.mpv.current_track.title[:32]}")
+
     def _handle_track_finished(self, reason: str):
         """Callback saat lagu selesai diputar oleh MPV."""
         if reason == "error":
@@ -416,14 +431,15 @@ class YoutubeMusicTUI:
         self.mpv.stop()
 
     def _update_animation(self):
-        # Animasi bar visualizer jika sedang memutar musik
+        # Animasi bar visualizer jika sedang memutar musik atau memuat audio
         if self.mpv.is_playing and not self.mpv.is_paused:
             for i in range(len(self.eq_heights)):
                 delta = random.randint(-2, 2)
                 self.eq_heights[i] = max(1, min(8, self.eq_heights[i] + delta))
         else:
+            idle_pattern = [2, 3, 4, 3, 2, 3, 5, 4, 3, 4, 2, 3, 4, 3, 2, 3]
             for i in range(len(self.eq_heights)):
-                self.eq_heights[i] = 1
+                self.eq_heights[i] = idle_pattern[i % len(idle_pattern)]
 
     def _handle_input(self):
         try:
@@ -684,19 +700,19 @@ class YoutubeMusicTUI:
         footer_h = 2 if (h >= 14 or self.search_active) else 1
         rem_h = h - cur_y - footer_h
 
-        if rem_h >= 14:
+        if rem_h >= 10:
             player_h = 5
             self._draw_box(cur_y, 0, player_h, w, "󰋋 Pemutar", 6)
             self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2, show_details=True)
             cur_y += player_h
-        elif rem_h >= 9:
-            player_h = 4
+        elif rem_h >= 7:
+            player_h = 5
             self._draw_box(cur_y, 0, player_h, w, "󰋋 Pemutar", 6)
-            self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2, show_details=False)
+            self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2, show_details=True)
             cur_y += player_h
         else:
             # Mode sangat sempit: Player bar 1-2 baris tanpa box
-            player_h = 2 if rem_h >= 6 else 1
+            player_h = 2 if rem_h >= 4 else 1
             self._draw_player_minimal(cur_y, 0, player_h, w)
             cur_y += player_h
 
@@ -753,10 +769,9 @@ class YoutubeMusicTUI:
                 vol_str = f"󰕾 {self.mpv.volume}%"
                 loop_str = f"󰑖 {self.mpv.loop_mode.upper()}"
                 eq_str = ""
-                if self.mpv.is_playing and not self.mpv.is_paused:
-                    avail_eq = max(0, (w - len(vol_str) - len(loop_str) - 8) // 2)
-                    for val in self.eq_heights[:avail_eq]:
-                        eq_str += self.eq_chars[val] + " "
+                avail_eq = max(0, (w - len(vol_str) - len(loop_str) - 8) // 2)
+                for val in self.eq_heights[:avail_eq]:
+                    eq_str += self.eq_chars[val] + " "
                 line_str = f"{vol_str}  {loop_str}  {eq_str}"[:w - 2]
                 self.stdscr.addstr(y + 2, x + 1, line_str, curses.color_pair(2))
         except curses.error:
@@ -907,7 +922,7 @@ class YoutubeMusicTUI:
                     cur_line += 2
 
             # 3. Waveform Equalizer (jika tinggi layar mencukupi)
-            if cur_line + 4 < y + h:
+            if cur_line + 3 < y + h:
                 eq_line = ""
                 for val in self.eq_heights[:max(1, (w - 6) // 2)]:
                     eq_line += self.eq_chars[val] + " "
