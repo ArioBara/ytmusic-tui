@@ -557,11 +557,11 @@ class YoutubeMusicTUI:
             self.set_status("󰒮 Mundur -10 detik")
 
         # Volume
-        elif key in [ord("+"), ord("=")]:
+        elif key in [ord("+"), ord("="), ord("v"), ord("V")]:
             self.mpv.adjust_volume(5)
             self.set_status(f"󰕾 Volume: {self.mpv.volume}%")
 
-        elif key in [ord("-"), ord("_")]:
+        elif key in [ord("-"), ord("_"), ord("b"), ord("B")]:
             self.mpv.adjust_volume(-5)
             self.set_status(f"󰕾 Volume: {self.mpv.volume}%")
 
@@ -818,7 +818,7 @@ class YoutubeMusicTUI:
                     self.stdscr.addstr(y, x, prompt_text[:max_w], curses.color_pair(3) | curses.A_BOLD)
             else:
                 if is_mobile:
-                    shortcuts = "[/]Cari [Spasi]Jeda [Enter]Putar [Tab]Antre"
+                    shortcuts = "[/]Cari [Spasi]Jeda [Enter]Putar [v/b]Vol"
                     if self.status_message and "Ditemukan" in self.status_message:
                         self.stdscr.addstr(y, x, f" {self.status_message}"[:max_w], curses.color_pair(4) | curses.A_BOLD)
                     else:
@@ -984,8 +984,8 @@ class YoutubeMusicTUI:
                 ("r", "Mode ulang lagu (Off / Single Track)"),
             ]),
             ("󰕾 KONTROL AUDIO & DURASI", [
-                ("+ / =", "Naikkan volume (+5%)"),
-                ("- / _", "Turunkan volume (-5%)"),
+                ("+ / v", "Naikkan volume (+5%)"),
+                ("- / b", "Turunkan volume (-5%)"),
                 ("m", "Bisukan suara (Mute toggle)"),
                 ("→ / ←", "Geser durasi maju / mundur 10 detik"),
             ]),
