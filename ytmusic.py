@@ -80,10 +80,10 @@ class MpvController:
             "--audio-samplerate=48000",
             f"--volume={self.volume}",
             "--mute=no",
-            "--demuxer-max-bytes=10M",
-            "--demuxer-readahead-secs=15",
-            "--ytdl-format=bestaudio/best[height<=480]/best",
-            "--ytdl-raw-options=js-runtimes=node:node,no-warnings=",
+            "--demuxer-max-bytes=15M",
+            "--demuxer-readahead-secs=20",
+            "--ytdl-format=bestaudio/18/best[height<=360]/best",
+            "--ytdl-raw-options=js-runtimes=node:node,extractor-args=youtube:player_client=android,no-warnings=",
             "--audio-client-name=ytmusic",
         ]
 
@@ -143,8 +143,10 @@ class MpvController:
             except Exception:
                 pass
 
-    def play(self, track: Track):
-        if self.current_track and self.current_track.video_id == track.video_id and (self.is_playing or self.is_loading):
+    def play(self, track: Track, force: bool = False):
+        if not force and self.current_track and self.current_track.video_id == track.video_id and self.is_playing and not self.is_loading:
+            if self.is_paused:
+                self.toggle_pause()
             return
 
         self.current_track = track
@@ -235,6 +237,8 @@ class MpvController:
                 elif evt == "playback-restart":
                     self.is_loading = False
                     self.is_playing = True
+                    if self.on_playback_start:
+                        self.on_playback_start()
 
                 elif evt == "end-file":
                     reason = data.get("reason", "unknown")
@@ -330,6 +334,7 @@ class YoutubeMusicTUI:
                 "--dump-json",
                 "--flat-playlist",
                 "--no-warnings",
+                "--extractor-args", "youtube:player_client=android",
                 f"ytsearch20:{self.query}"
             ]
             results = []
@@ -388,7 +393,7 @@ class YoutubeMusicTUI:
     def _handle_track_finished(self, reason: str):
         """Callback saat lagu selesai diputar oleh MPV."""
         if reason == "error":
-            self.set_status("󰅚 Gagal memuat audio YouTube. Melewati lagu...")
+            self.set_status("󰅚 Gagal memutar audio YouTube (403/Unplayable).")
             if self.queue:
                 next_song = self.queue.pop(0)
                 self.play_track(next_song)
@@ -700,19 +705,14 @@ class YoutubeMusicTUI:
         footer_h = 2 if (h >= 14 or self.search_active) else 1
         rem_h = h - cur_y - footer_h
 
-        if rem_h >= 10:
+        if rem_h >= 6:
             player_h = 5
             self._draw_box(cur_y, 0, player_h, w, "󰋋 Pemutar", 6)
-            self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2, show_details=True)
-            cur_y += player_h
-        elif rem_h >= 7:
-            player_h = 5
-            self._draw_box(cur_y, 0, player_h, w, "󰋋 Pemutar", 6)
-            self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2, show_details=True)
+            self._draw_player_compact(cur_y + 1, 1, player_h - 2, w - 2)
             cur_y += player_h
         else:
             # Mode sangat sempit: Player bar 1-2 baris tanpa box
-            player_h = 2 if rem_h >= 4 else 1
+            player_h = 2 if rem_h >= 3 else 1
             self._draw_player_minimal(cur_y, 0, player_h, w)
             cur_y += player_h
 
@@ -729,7 +729,7 @@ class YoutubeMusicTUI:
         foot_y = h - footer_h
         self._draw_footer_content(foot_y, 1, w - 2, is_mobile=True)
 
-    def _draw_player_compact(self, y: int, x: int, h: int, w: int, show_details: bool = True):
+    def _draw_player_compact(self, y: int, x: int, h: int, w: int):
         """Player card ringkas untuk layar HP di dalam box."""
         track = self.mpv.current_track
         try:
@@ -764,14 +764,12 @@ class YoutubeMusicTUI:
                 prog_str = f"{cur_s} {bar} {tot_s}"[:w - 2]
                 self.stdscr.addstr(y + 1, x + 1, prog_str, curses.color_pair(1))
 
-            # Baris 3: Detail Volume, Loop & Visualizer (jika cukup ruang)
-            if h >= 3 and show_details:
+            # Baris 3: Detail Volume, Loop & Visualizer (selalu ditampilkan jika cukup baris)
+            if h >= 3:
                 vol_str = f"󰕾 {self.mpv.volume}%"
                 loop_str = f"󰑖 {self.mpv.loop_mode.upper()}"
-                eq_str = ""
                 avail_eq = max(0, (w - len(vol_str) - len(loop_str) - 8) // 2)
-                for val in self.eq_heights[:avail_eq]:
-                    eq_str += self.eq_chars[val] + " "
+                eq_str = "".join(self.eq_chars[val] + " " for val in self.eq_heights[:avail_eq])
                 line_str = f"{vol_str}  {loop_str}  {eq_str}"[:w - 2]
                 self.stdscr.addstr(y + 2, x + 1, line_str, curses.color_pair(2))
         except curses.error:
@@ -798,8 +796,11 @@ class YoutubeMusicTUI:
                 self.stdscr.addstr(y, x + 1, f"{icon} YouTube Music TUI"[:w - 1], col | curses.A_BOLD)
 
             if h >= 2:
-                sep = "─" * (w - 2)
-                self.stdscr.addstr(y + 1, x + 1, sep[:w - 2], curses.color_pair(6))
+                vol_str = f"󰕾 {self.mpv.volume}%"
+                avail_eq = max(0, (w - len(vol_str) - 6) // 2)
+                eq_str = "".join(self.eq_chars[val] + " " for val in self.eq_heights[:avail_eq])
+                line = f"{vol_str}  {eq_str}"[:w - 2]
+                self.stdscr.addstr(y + 1, x + 1, line, curses.color_pair(2))
         except curses.error:
             pass
 
